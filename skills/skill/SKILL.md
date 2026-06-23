@@ -224,6 +224,12 @@ let info   = client.get_server_info().await?;
 | Multi-turn conversation | `cargo run --example multi_turn` |
 | In-process calculator tools | `cargo run --example sdk_mcp_calculator` |
 | Streaming message input | `cargo run --example stream_input` |
+| System prompt variants | `cargo run --example system_prompt` |
+| Tools option | `cargo run --example tools_option` |
+| Cost control | `cargo run --example max_budget_usd` |
+| Partial message streaming | `cargo run --example include_partial_messages` |
+| Setting sources | `cargo run --example setting_sources` |
+| Stderr capture | `cargo run --example stderr_callback` |
 
 ## Verification
 

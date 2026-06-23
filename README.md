@@ -271,6 +271,12 @@ match parse_message(&v) {
 | `cargo run --example multi_turn` | Multi-turn conversation with `ClaudeSDKClient` |
 | `cargo run --example sdk_mcp_calculator` | In-process MCP calculator tools |
 | `cargo run --example stream_input` | Streaming message input with `query_with_messages` |
+| `cargo run --example system_prompt` | `SystemPrompt::Custom`, preset, and preset+append |
+| `cargo run --example tools_option` | `Tools::List`, empty list, and `Tools::Preset` |
+| `cargo run --example max_budget_usd` | Cost control with `max_budget_usd` |
+| `cargo run --example include_partial_messages` | Real-time text streaming via `StreamEvent` |
+| `cargo run --example setting_sources` | Control which config directories Claude reads |
+| `cargo run --example stderr_callback` | Capture CLI stderr output via a callback |
 
 ## Development
 
