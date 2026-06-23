@@ -265,7 +265,7 @@ match parse_message(&v) {
 
 ## Examples
 
-| Example | Description |
+| Command | Description |
 |---|---|
 | `cargo run --example quick_start` | One-shot `query()` with basic options |
 | `cargo run --example multi_turn` | Multi-turn conversation with `ClaudeSDKClient` |
@@ -277,6 +277,10 @@ match parse_message(&v) {
 | `cargo run --example include_partial_messages` | Real-time text streaming via `StreamEvent` |
 | `cargo run --example setting_sources` | Control which config directories Claude reads |
 | `cargo run --example stderr_callback` | Capture CLI stderr output via a callback |
+
+Each example is a self-contained `examples/*.rs` file. See
+[`skills/skill/references/examples.md`](skills/skill/references/examples.md)
+for key APIs and patterns covered by each.
 
 ## Development
 
