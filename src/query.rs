@@ -1,0 +1,233 @@
+//! High-level query API: one-shot and interactive conversations with Claude.
+//!
+//! Mirrors the Python `query()` function.
+
+use serde_json::Value;
+use tokio::sync::mpsc;
+
+use crate::control::{Query, QueryConfig};
+use crate::error::ClaudeSdkError;
+use crate::message_parser::parse_message;
+use crate::options::ClaudeAgentOptions;
+use crate::session::{
+    apply_materialized_options, build_mirror_batcher, materialize_resume_session,
+    MaterializedResume,
+};
+use crate::transport::{SubprocessCLITransport, Transport};
+use crate::types::Message;
+
+/// A handle to a running query. Yields parsed [`Message`]s.
+///
+/// Created by [`query`]. Drop it (or call [`close`]) to terminate the
+/// underlying subprocess.
+///
+/// [`close`]: QueryHandle::close
+pub struct QueryHandle {
+    query: Option<Query>,
+    rx: mpsc::Receiver<Result<Value, ClaudeSdkError>>,
+    materialized: Option<MaterializedResume>,
+}
+
+impl QueryHandle {
+    /// Receive the next parsed message, or `None` when the stream ends.
+    pub async fn next_message(&mut self) -> Result<Option<Message>, ClaudeSdkError> {
+        loop {
+            match self.rx.recv().await {
+                Some(Ok(value)) => {
+                    let t = value.get("type").and_then(Value::as_str).unwrap_or("");
+                    if t == "control_response" || t == "control_request" {
+                        continue;
+                    }
+                    match parse_message(&value) {
+                        Ok(Some(msg)) => return Ok(Some(msg)),
+                        Ok(None) => continue,
+                        Err(e) => return Err(ClaudeSdkError::new(e.message)),
+                    }
+                }
+                Some(Err(e)) => return Err(e),
+                None => return Ok(None),
+            }
+        }
+    }
+
+    /// Send an interrupt to the running conversation.
+    pub async fn interrupt(&mut self) -> Result<(), ClaudeSdkError> {
+        match &self.query {
+            Some(q) => q.interrupt().await,
+            None => Err(ClaudeSdkError::new("query already closed")),
+        }
+    }
+
+    /// Change the permission mode mid-conversation.
+    pub async fn set_permission_mode(
+        &mut self,
+        mode: crate::types::PermissionMode,
+    ) -> Result<(), ClaudeSdkError> {
+        match &self.query {
+            Some(q) => q.set_permission_mode(mode).await,
+            None => Err(ClaudeSdkError::new("query already closed")),
+        }
+    }
+
+    /// Gracefully close the query and its transport.
+    pub async fn close(mut self) -> Result<(), ClaudeSdkError> {
+        // Drop the receiver first so the read loop isn't blocked.
+        self.rx.close();
+        if let Some(q) = self.query.take() {
+            q.close().await?;
+        }
+        if let Some(materialized) = self.materialized.take() {
+            materialized.cleanup().await;
+        }
+        Ok(())
+    }
+}
+
+/// Start a one-shot query against Claude Code.
+///
+/// Spawns the `claude` CLI subprocess, runs the initialize handshake, sends
+/// the prompt, and returns a [`QueryHandle`] that yields parsed messages.
+///
+/// # Example
+/// ```no_run
+/// # async fn run() -> Result<(), claude_agent_sdk::ClaudeSdkError> {
+/// use claude_agent_sdk::{query, ClaudeAgentOptions, Message, ContentBlock};
+///
+/// let mut handle = query("What is 2+2?", ClaudeAgentOptions::default()).await?;
+/// while let Some(msg) = handle.next_message().await? {
+///     if let Message::Assistant(a) = &msg {
+///         for block in &a.content {
+///             if let Some(t) = block.as_text() {
+///                 println!("{}", t.text);
+///             }
+///         }
+///     }
+/// }
+/// handle.close().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn query(
+    prompt: impl AsRef<str>,
+    options: ClaudeAgentOptions,
+) -> Result<QueryHandle, ClaudeSdkError> {
+    query_with_config(prompt, options, QueryConfig::default()).await
+}
+
+/// Like [`query`] but with an explicit control-protocol config (hooks,
+/// can_use_tool callback, agents, etc.).
+pub async fn query_with_config(
+    prompt: impl AsRef<str>,
+    options: ClaudeAgentOptions,
+    config: QueryConfig,
+) -> Result<QueryHandle, ClaudeSdkError> {
+    if config.can_use_tool.is_some() {
+        return Err(ClaudeSdkError::new(
+            "can_use_tool callback requires streaming mode; use the streaming query API instead of a string prompt",
+        ));
+    }
+    if config.can_use_tool.is_some() && options.permission_prompt_tool_name.is_some() {
+        return Err(ClaudeSdkError::new(
+            "can_use_tool callback cannot be used with permission_prompt_tool_name",
+        ));
+    }
+
+    let materialized = materialize_resume_session(&options).await?;
+    let effective_options = materialized
+        .as_ref()
+        .map(|m| apply_materialized_options(&options, m))
+        .unwrap_or_else(|| options.clone());
+
+    let mut transport = SubprocessCLITransport::new(effective_options.clone());
+    transport.connect().await?;
+
+    let boxed: Box<dyn Transport> = Box::new(transport);
+    let mut query_obj = Query::new(boxed, config)?;
+    if let Some(store) = options.session_store.clone() {
+        let on_error = query_obj.mirror_error_callback();
+        query_obj.set_transcript_mirror_batcher(build_mirror_batcher(
+            store,
+            materialized.as_ref(),
+            Some(&effective_options.env),
+            options.session_store_flush,
+            on_error,
+        ));
+    }
+    query_obj.start();
+    if let Err(e) = query_obj.initialize().await {
+        if let Some(materialized) = materialized.as_ref() {
+            materialized.cleanup().await;
+        }
+        return Err(e);
+    }
+
+    query_obj.write_user_message(prompt.as_ref()).await?;
+    // Do NOT close stdin — the CLI in stream-json mode keeps the session open
+    // and sends a result message when the turn completes. The subprocess is
+    // cleaned up when the QueryHandle is dropped/closed.
+
+    let rx = query_obj
+        .take_receiver()
+        .ok_or_else(|| ClaudeSdkError::new("message receiver already taken"))?;
+
+    Ok(QueryHandle {
+        query: Some(query_obj),
+        rx,
+        materialized,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::{CanUseToolCallback, PermissionResult};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn query_rejects_can_use_tool_with_string_prompt() {
+        let cb: CanUseToolCallback = Arc::new(|_, _, _| {
+            Box::pin(async {
+                PermissionResult::Allow {
+                    updated_input: None,
+                    updated_permissions: None,
+                }
+            })
+        });
+        let config = QueryConfig {
+            can_use_tool: Some(cb),
+            ..Default::default()
+        };
+        let result = query_with_config("hello", ClaudeAgentOptions::default(), config).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.message.contains("streaming mode"));
+    }
+
+    #[tokio::test]
+    async fn query_rejects_can_use_tool_with_permission_prompt_tool() {
+        let cb: CanUseToolCallback = Arc::new(|_, _, _| {
+            Box::pin(async {
+                PermissionResult::Allow {
+                    updated_input: None,
+                    updated_permissions: None,
+                }
+            })
+        });
+        let config = QueryConfig {
+            can_use_tool: Some(cb),
+            ..Default::default()
+        };
+        let opts = ClaudeAgentOptions {
+            permission_prompt_tool_name: Some("CustomTool".into()),
+            ..Default::default()
+        };
+        let result = query_with_config("hi", opts, config).await;
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected error"),
+        };
+        assert!(err.message.contains("streaming mode"));
+    }
+}
