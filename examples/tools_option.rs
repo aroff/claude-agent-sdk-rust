@@ -75,9 +75,10 @@ async fn run(prompt: &str, opts: ClaudeAgentOptions) {
                     if let Some(arr) = tools.as_array() {
                         let names: Vec<&str> = arr
                             .iter()
-                            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+                            .filter_map(|v| v.as_str())
                             .collect();
-                        println!("Active tools ({} total): {:?}", names.len(), &names[..names.len().min(6)]);
+                        let shown = names.len().min(6);
+                        println!("Active tools ({} total): {:?}", names.len(), &names[..shown]);
                         if names.len() > 6 { println!("  ... and {} more", names.len() - 6); }
                     }
                 }

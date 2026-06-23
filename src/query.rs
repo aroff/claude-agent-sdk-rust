@@ -169,9 +169,11 @@ pub async fn query_with_config(
     }
 
     query_obj.write_user_message(prompt.as_ref()).await?;
-    // Do NOT close stdin — the CLI in stream-json mode keeps the session open
-    // and sends a result message when the turn completes. The subprocess is
-    // cleaned up when the QueryHandle is dropped/closed.
+    // Close stdin unless the config needs it open for in-process MCP or hooks.
+    // Without EOF, the CLI waits for more input and never emits its Result message.
+    if !query_obj.needs_stdin_for_control() {
+        query_obj.end_input().await?;
+    }
 
     let rx = query_obj
         .take_receiver()
