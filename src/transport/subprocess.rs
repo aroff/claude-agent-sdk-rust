@@ -506,4 +506,42 @@ mod tests {
         let eof = reader.read_message().await.unwrap();
         assert!(eof.is_none());
     }
+
+    /// Verify that `SubprocessCLITransport::close()` reaps the child process.
+    ///
+    /// Uses `cat` as a stand-in: closing stdin sends EOF so cat exits cleanly,
+    /// then `transport.close()` awaits the child and ensures the PID is gone.
+    /// This exercises the graceful-shutdown branch (stdin → EOF → wait).
+    #[tokio::test]
+    async fn transport_close_reaps_child() {
+        let opts = ClaudeAgentOptions::default();
+        let mut t = SubprocessCLITransport::new(opts);
+        let mut cmd = Command::new("cat");
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().expect("cat should be available");
+        let pid = child.id().expect("child should have a PID");
+        t.stdin = child.stdin.take();
+        t.stdout = child.stdout.take().map(BufReader::new);
+        t.child = Some(child);
+        t.ready = true;
+
+        // close() drops stdin (EOF → cat exits) then awaits the child.
+        t.close().await.expect("close should not error");
+
+        // After close() returns the child is fully reaped — its PID should
+        // no longer appear in /proc on Linux.
+        #[cfg(target_os = "linux")]
+        {
+            let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
+            assert!(
+                !proc_path.exists(),
+                "child process {pid} should have been reaped after close()"
+            );
+        }
+        // Silence unused-variable warning on non-Linux.
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
+    }
 }

@@ -420,6 +420,19 @@ impl Query {
         self.writer.lock().await.end_input().await
     }
 
+    /// Return a clone of the writer Arc. Used by external write tasks (e.g.
+    /// the streaming query path) that need to write messages without holding
+    /// a reference to the full [`Query`].
+    pub fn writer_arc(&self) -> Arc<Mutex<Box<dyn TransportWriter>>> {
+        self.writer.clone()
+    }
+
+    /// Whether the MCP or hooks config requires keeping stdin open until the
+    /// first result (bidirectional control-protocol mode).
+    pub fn needs_stdin_for_control(&self) -> bool {
+        !self.config.sdk_mcp_servers.is_empty() || !self.config.hooks.is_empty()
+    }
+
     /// Change the model mid-conversation.
     pub async fn set_model(&self, model: Option<&str>) -> Result<(), ClaudeSdkError> {
         let request = match model {

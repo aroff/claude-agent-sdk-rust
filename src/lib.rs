@@ -57,7 +57,7 @@ pub use options::{
     SkillsFilter, SystemPrompt, SystemPromptFile, SystemPromptPreset, TaskBudget, ThinkingConfig,
     Tools, ToolsPreset, MINIMUM_CLAUDE_CODE_VERSION, SDK_VERSION,
 };
-pub use query::{query, query_with_config, QueryHandle};
+pub use query::{query, query_with_config, query_with_messages, query_with_messages_and_config, QueryHandle};
 pub use sdk_mcp::{
     create_sdk_mcp_server, tool, SdkMcpServer, SdkMcpServerConfig, SdkMcpTool, SdkMcpToolHandler,
 };
