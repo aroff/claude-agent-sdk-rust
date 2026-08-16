@@ -21,6 +21,12 @@ pub struct SDKSessionInfo {
     pub cwd: Option<String>,
     pub tag: Option<String>,
     pub created_at: Option<i64>,
+    /// Number of transcript messages (entries kept by
+    /// [`filter_transcript_entries`]: `user`/`assistant`/`progress`/`system`/
+    /// `attachment` with a `uuid`). Computed for free while listing since the
+    /// entries are already read. `None` only on the cached-summary store path
+    /// where the raw entries were not loaded.
+    pub message_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -416,6 +422,18 @@ pub(crate) fn entries_to_session_info(
     if summary.is_empty() {
         return None;
     }
+    // Free: the entries are already in hand. Count transcript messages using the
+    // same predicate as `filter_transcript_entries` (entries here are raw
+    // `Value`s, so we inline it rather than take the `Vec`-consuming helper).
+    let message_count = entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.get("type").and_then(Value::as_str),
+                Some("user" | "assistant" | "progress" | "system" | "attachment")
+            ) && e.get("uuid").and_then(Value::as_str).is_some()
+        })
+        .count() as u64;
     Some(SDKSessionInfo {
         session_id: session_id.into(),
         summary,
@@ -427,6 +445,7 @@ pub(crate) fn entries_to_session_info(
         cwd,
         tag,
         created_at,
+        message_count: Some(message_count),
     })
 }
 
@@ -463,6 +482,9 @@ fn summary_value_to_info(
         cwd: obj.get("cwd").and_then(Value::as_str).map(String::from),
         tag: obj.get("tag").and_then(Value::as_str).map(String::from),
         created_at: obj.get("created_at").and_then(Value::as_i64),
+        // Cached-summary path: raw entries were not loaded. Honour a cached
+        // `message_count` if the summary carries one, else `None`.
+        message_count: obj.get("message_count").and_then(Value::as_u64),
     })
     .filter(|i| !i.summary.is_empty())
 }
@@ -735,5 +757,22 @@ mod tests {
             .unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].r#type, "user");
+    }
+
+    #[test]
+    fn session_info_counts_transcript_messages() {
+        let sid = "550e8400-e29b-41d4-a716-446655440000";
+        let entries = vec![
+            json!({"type":"user","uuid":"u1","message":{"content":"hi"}}),
+            json!({"type":"assistant","uuid":"a1","message":{"content":[{"type":"text","text":"hello"}]}}),
+            // Not a transcript message: no `uuid` → excluded from the count.
+            json!({"type":"summary","summary":"My Title"}),
+            // Wrong `type` → excluded.
+            json!({"type":"custom-title","uuid":"c1","customTitle":"My Title"}),
+        ];
+        let info = entries_to_session_info(sid, &entries, 1_700_000_000_000, Some(42)).unwrap();
+        // Only the two `uuid`-bearing user/assistant entries count.
+        assert_eq!(info.message_count, Some(2));
+        assert_eq!(info.summary, "My Title");
     }
 }
