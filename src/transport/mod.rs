@@ -15,14 +15,14 @@ use crate::error::ClaudeSdkError;
 
 /// Reader half of a transport: owns stdout, yields parsed JSON messages.
 #[async_trait]
-pub trait TransportReader: Send {
+pub trait TransportReader: Send + Sync {
     /// Read the next parsed JSON message, or `Ok(None)` at EOF.
     async fn read_message(&mut self) -> Result<Option<Value>, ClaudeSdkError>;
 }
 
 /// Writer half of a transport: owns stdin, writes raw payloads.
 #[async_trait]
-pub trait TransportWriter: Send {
+pub trait TransportWriter: Send + Sync {
     /// Write raw data (typically JSON + newline) to stdin.
     async fn write(&mut self, data: &str) -> Result<(), ClaudeSdkError>;
 
