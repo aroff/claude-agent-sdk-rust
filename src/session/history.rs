@@ -44,6 +44,11 @@ pub fn list_sessions(
     offset: usize,
     _include_worktrees: bool,
 ) -> Vec<SDKSessionInfo> {
+    if let Some(limit) = limit.filter(|l| *l > 0) {
+        if let Some(infos) = list_sessions_lazy(directory, limit, offset) {
+            return infos;
+        }
+    }
     let mut infos = if let Some(dir) = directory {
         let project_dir = get_projects_dir(None).join(project_key_for_directory(dir));
         read_sessions_from_project_dir(&project_dir, Some(dir))
@@ -58,6 +63,91 @@ pub fn list_sessions(
             .collect()
     };
     sort_page(&mut infos, limit, offset)
+}
+
+/// Bounded-`limit` fast path: ranks candidate session files by filesystem
+/// mtime (a `stat`, no file content read) before doing any full transcript
+/// parse, then fully parses only as many files — in mtime-descending order —
+/// as are needed to satisfy `offset` + `limit`. This makes `limit` actually
+/// bound the work done, instead of paying for a full parse of every session
+/// in the store just to keep the top few.
+///
+/// Returns `None` if any candidate's filesystem mtime is unavailable (rare —
+/// e.g. some virtual filesystems). In that case there's no cheap, safe way
+/// to estimate recency for that file without parsing it, so the caller must
+/// fall back to the exhaustive parse-everything-then-sort path for
+/// correctness. This never changes output: see the equivalence tests in
+/// `tests/list_sessions_lazy.rs`, which assert this path returns exactly
+/// what `list_sessions(dir, None, 0, w).into_iter().skip(offset).take(limit)`
+/// returns.
+fn list_sessions_lazy(
+    directory: Option<&Path>,
+    limit: usize,
+    offset: usize,
+) -> Option<Vec<SDKSessionInfo>> {
+    let (candidates, dir_ctx) = if let Some(dir) = directory {
+        let project_dir = get_projects_dir(None).join(project_key_for_directory(dir));
+        (session_file_candidates(&project_dir), Some(dir))
+    } else {
+        let projects_dir = get_projects_dir(None);
+        let candidates = std::fs::read_dir(projects_dir)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten())
+            .filter(|e| e.path().is_dir())
+            .flat_map(|e| session_file_candidates(&e.path()))
+            .collect();
+        (candidates, None)
+    };
+
+    let mut timed: Vec<(PathBuf, i64)> = Vec::with_capacity(candidates.len());
+    for path in candidates {
+        let mtime = std::fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(system_time_ms)?;
+        timed.push((path, mtime));
+    }
+    timed.sort_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
+
+    let mut out = Vec::with_capacity(limit);
+    let mut skipped = 0usize;
+    for (path, _) in timed {
+        let Some(info) = parse_session_info_file(&path, dir_ctx) else {
+            continue;
+        };
+        if skipped < offset {
+            skipped += 1;
+            continue;
+        }
+        out.push(info);
+        if out.len() == limit {
+            break;
+        }
+    }
+    Some(out)
+}
+
+/// `.jsonl` files directly under `project_dir` whose stem is a valid session
+/// UUID, in filesystem enumeration order. Mirrors the two cheap, I/O-free
+/// checks `parse_session_info_file` applies before it ever touches metadata
+/// or file content, so files it would reject up front never become
+/// candidates here either.
+fn session_file_candidates(project_dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(project_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .map(|e| e.path())
+        .filter(|path| {
+            path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(validate_uuid)
+                    .is_some()
+        })
+        .collect()
 }
 
 pub fn get_session_info(session_id: &str, directory: Option<&Path>) -> Option<SDKSessionInfo> {
