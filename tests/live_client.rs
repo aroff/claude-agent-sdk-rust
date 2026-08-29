@@ -24,8 +24,14 @@ async fn live_client_multi_turn() {
 
     // Connect
     match tokio::time::timeout(LIVE_TIMEOUT, client.connect(None)).await {
-        Err(_) => { eprintln!("[skip] connect timed out — no live Claude available"); return; }
-        Ok(Err(e)) if is_env_noise(&e) => { eprintln!("[skip] environment noise: {e}"); return; }
+        Err(_) => {
+            eprintln!("[skip] connect timed out — no live Claude available");
+            return;
+        }
+        Ok(Err(e)) if is_env_noise(&e) => {
+            eprintln!("[skip] environment noise: {e}");
+            return;
+        }
         Ok(Err(e)) => panic!("connect failed: {e}"),
         Ok(Ok(())) => {}
     };
@@ -97,8 +103,14 @@ async fn live_client_get_mcp_status() {
     let opts = ClaudeAgentOptions::default();
     let mut client = ClaudeSDKClient::new(opts);
     match tokio::time::timeout(LIVE_TIMEOUT, client.connect(None)).await {
-        Err(_) => { eprintln!("[skip] connect timed out — no live Claude available"); return; }
-        Ok(Err(e)) if is_env_noise(&e) => { eprintln!("[skip] environment noise: {e}"); return; }
+        Err(_) => {
+            eprintln!("[skip] connect timed out — no live Claude available");
+            return;
+        }
+        Ok(Err(e)) if is_env_noise(&e) => {
+            eprintln!("[skip] environment noise: {e}");
+            return;
+        }
         Ok(Err(e)) => panic!("connect failed: {e}"),
         Ok(Ok(())) => {}
     };
@@ -115,8 +127,14 @@ async fn live_client_get_server_info() {
     let opts = ClaudeAgentOptions::default();
     let mut client = ClaudeSDKClient::new(opts);
     match tokio::time::timeout(LIVE_TIMEOUT, client.connect(None)).await {
-        Err(_) => { eprintln!("[skip] connect timed out — no live Claude available"); return; }
-        Ok(Err(e)) if is_env_noise(&e) => { eprintln!("[skip] environment noise: {e}"); return; }
+        Err(_) => {
+            eprintln!("[skip] connect timed out — no live Claude available");
+            return;
+        }
+        Ok(Err(e)) if is_env_noise(&e) => {
+            eprintln!("[skip] environment noise: {e}");
+            return;
+        }
         Ok(Err(e)) => panic!("connect failed: {e}"),
         Ok(Ok(())) => {}
     };
