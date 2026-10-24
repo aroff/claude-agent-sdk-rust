@@ -36,6 +36,11 @@ pub struct SessionMessage {
     pub session_id: String,
     pub message: Value,
     pub parent_tool_use_id: Option<Value>,
+    /// Native transcript ingress metadata, preserved verbatim for diagnostics.
+    /// Missing/null is unknown, not an owner-authored message. This file-backed
+    /// value is not authenticated delivery or model-consumption evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Value>,
 }
 
 pub fn list_sessions(
@@ -650,6 +655,7 @@ fn to_session_message(entry: Value) -> Option<SessionMessage> {
             .to_string(),
         message: entry.get("message").cloned().unwrap_or(Value::Null),
         parent_tool_use_id: None,
+        origin: entry.get("origin").filter(|v| !v.is_null()).cloned(),
     })
 }
 
@@ -835,5 +841,33 @@ mod tests {
         // Only the two `uuid`-bearing user/assistant entries count.
         assert_eq!(info.message_count, Some(2));
         assert_eq!(info.summary, "My Title");
+    }
+
+    #[test]
+    fn history_retains_native_origin_without_inventing_owner_or_delivery_authority() {
+        for origin in [
+            json!({"kind":"plugin","name":"review-plugin"}),
+            json!({"kind":"future-source","details":["opaque"]}),
+            json!(17),
+            Value::Null,
+        ] {
+            let entries = vec![json!({"type":"user","uuid":"u1","sessionId":"session",
+                "origin":origin,"message":{"content":"frozen review"}})];
+            let messages = entries_to_session_messages(entries, None, 0);
+            assert_eq!(messages.len(), 1);
+            assert_eq!(
+                messages[0].origin,
+                if origin.is_null() { None } else { Some(origin) }
+            );
+            assert_eq!(messages[0].message, json!({"content":"frozen review"}));
+        }
+        let message: SessionMessage = serde_json::from_value(json!({"type":"user","uuid":"old",
+            "session_id":"session","message":{"content":"old"},"parent_tool_use_id":null}))
+        .unwrap();
+        assert!(message.origin.is_none());
+        assert!(serde_json::to_value(message)
+            .unwrap()
+            .get("origin")
+            .is_none());
     }
 }
