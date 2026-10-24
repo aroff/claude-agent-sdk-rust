@@ -37,7 +37,9 @@ async fn main() {
             Some(Message::StreamEvent(ev)) => {
                 stream_events += 1;
                 // The `event` field contains the raw incremental delta from the CLI
-                if let Some(text) = ev.event.get("delta")
+                if let Some(text) = ev
+                    .event
+                    .get("delta")
                     .and_then(|d| d.get("text"))
                     .and_then(|t| t.as_str())
                 {

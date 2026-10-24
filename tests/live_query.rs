@@ -90,23 +90,19 @@ async fn live_query_with_messages_stream() {
         "parent_tool_use_id": null,
     })]);
 
-    let mut handle = match tokio::time::timeout(
-        LIVE_TIMEOUT,
-        query_with_messages(messages, opts),
-    )
-    .await
-    {
-        Err(_) => {
-            eprintln!("[skip] query_with_messages() timed out — no live Claude available");
-            return;
-        }
-        Ok(Err(e)) if is_env_noise(&e) => {
-            eprintln!("[skip] environment noise: {e}");
-            return;
-        }
-        Ok(Err(e)) => panic!("query_with_messages() failed: {e}"),
-        Ok(Ok(h)) => h,
-    };
+    let mut handle =
+        match tokio::time::timeout(LIVE_TIMEOUT, query_with_messages(messages, opts)).await {
+            Err(_) => {
+                eprintln!("[skip] query_with_messages() timed out — no live Claude available");
+                return;
+            }
+            Ok(Err(e)) if is_env_noise(&e) => {
+                eprintln!("[skip] environment noise: {e}");
+                return;
+            }
+            Ok(Err(e)) => panic!("query_with_messages() failed: {e}"),
+            Ok(Ok(h)) => h,
+        };
 
     let mut got_text = String::new();
     let mut got_result = false;

@@ -76,7 +76,10 @@ async fn print_slash_commands(opts: ClaudeAgentOptions) {
         return;
     }
 
-    client.query("What is 2 + 2? Reply with just the number.", None).await.unwrap();
+    client
+        .query("What is 2 + 2? Reply with just the number.", None)
+        .await
+        .unwrap();
 
     loop {
         match client.receive_message().await.unwrap() {

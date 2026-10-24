@@ -152,7 +152,7 @@ impl CliJsonDecodeError {
         let prefix: String = line.chars().take(100).collect();
         Self {
             line,
-            original_message: format!("Failed to decode JSON: {prefix}... [{}]", original_error),
+            original_message: format!("Failed to decode JSON: {prefix}... [{original_error}]"),
         }
     }
 }

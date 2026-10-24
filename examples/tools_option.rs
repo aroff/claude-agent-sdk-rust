@@ -73,13 +73,16 @@ async fn run(prompt: &str, opts: ClaudeAgentOptions) {
             Message::System(s) if s.subtype == "init" => {
                 if let Some(tools) = s.data.get("tools") {
                     if let Some(arr) = tools.as_array() {
-                        let names: Vec<&str> = arr
-                            .iter()
-                            .filter_map(|v| v.as_str())
-                            .collect();
+                        let names: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
                         let shown = names.len().min(6);
-                        println!("Active tools ({} total): {:?}", names.len(), &names[..shown]);
-                        if names.len() > 6 { println!("  ... and {} more", names.len() - 6); }
+                        println!(
+                            "Active tools ({} total): {:?}",
+                            names.len(),
+                            &names[..shown]
+                        );
+                        if names.len() > 6 {
+                            println!("  ... and {} more", names.len() - 6);
+                        }
                     }
                 }
             }
