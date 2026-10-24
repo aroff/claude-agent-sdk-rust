@@ -36,6 +36,11 @@ pub struct SessionMessage {
     pub session_id: String,
     pub message: Value,
     pub parent_tool_use_id: Option<Value>,
+    /// Native transcript ingress metadata, preserved verbatim for diagnostics.
+    /// Missing/null is unknown, not an owner-authored message. This file-backed
+    /// value is not authenticated delivery or model-consumption evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Value>,
 }
 
 pub fn list_sessions(
@@ -634,10 +639,18 @@ fn read_jsonl_file(path: &Path) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+fn is_main_chain_entry(entry: &Value) -> bool {
+    !entry
+        .get("isSidechain")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && entry.get("teamName").is_none()
+}
+
 fn build_conversation_chain(entries: Vec<Value>) -> Vec<Value> {
     let mut by_uuid: HashMap<String, Value> = HashMap::new();
     let mut parent_uuids = HashSet::new();
-    for entry in &entries {
+    for entry in entries.iter().filter(|entry| is_main_chain_entry(entry)) {
         if let Some(uuid) = entry.get("uuid").and_then(Value::as_str) {
             by_uuid.insert(uuid.to_string(), entry.clone());
         }
@@ -645,26 +658,23 @@ fn build_conversation_chain(entries: Vec<Value>) -> Vec<Value> {
             parent_uuids.insert(parent.to_string());
         }
     }
-    let leaf = entries
+    entries
         .iter()
         .rev()
-        .find(|e| {
-            e.get("uuid")
-                .and_then(Value::as_str)
-                .map(|uuid| !parent_uuids.contains(uuid))
-                .unwrap_or(false)
-                && matches!(
-                    e.get("type").and_then(Value::as_str),
-                    Some("user" | "assistant")
-                )
-                && !e
-                    .get("isSidechain")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                && !e.get("isMeta").and_then(Value::as_bool).unwrap_or(false)
+        .find_map(|entry| {
+            let is_main_leaf = is_main_chain_entry(entry)
+                && entry
+                    .get("uuid")
+                    .and_then(Value::as_str)
+                    .map(|uuid| !parent_uuids.contains(uuid))
+                    .unwrap_or(false);
+            if !is_main_leaf {
+                return None;
+            }
+            let chain = build_parent_chain(Some(entry.clone()), &by_uuid);
+            chain.iter().any(is_visible_message).then_some(chain)
         })
-        .cloned();
-    build_parent_chain(leaf, &by_uuid)
+        .unwrap_or_default()
 }
 
 fn build_subagent_chain(entries: Vec<Value>) -> Vec<Value> {
@@ -735,6 +745,7 @@ fn to_session_message(entry: Value) -> Option<SessionMessage> {
             .to_string(),
         message: entry.get("message").cloned().unwrap_or(Value::Null),
         parent_tool_use_id: None,
+        origin: entry.get("origin").filter(|v| !v.is_null()).cloned(),
     })
 }
 
@@ -823,6 +834,62 @@ mod tests {
     use crate::session::{InMemorySessionStore, SessionStore};
     use serde_json::json;
 
+    #[test]
+    fn history_follows_main_chain_through_native_control_rows() {
+        let entries = vec![
+            json!({"type":"user","uuid":"u1","message":{"content":"review"}}),
+            json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"answer"}}),
+            json!({"type":"attachment","uuid":"hook","parentUuid":"a1"}),
+            json!({"type":"system","uuid":"duration","parentUuid":"hook"}),
+            json!({"type":"user","uuid":"meta","parentUuid":"duration","isMeta":true,"message":{"content":"internal"}}),
+            json!({"type":"system","uuid":"last","parentUuid":"meta"}),
+        ];
+        let messages = entries_to_session_messages(entries, None, 0);
+        assert_eq!(
+            messages.iter().map(|m| m.uuid.as_str()).collect::<Vec<_>>(),
+            vec!["u1", "a1"]
+        );
+    }
+
+    #[test]
+    fn non_main_children_do_not_hide_the_main_leaf() {
+        for marker in [json!({"isSidechain":true}), json!({"teamName":"other"})] {
+            let mut child = json!({"type":"assistant","uuid":"child","parentUuid":"a1","message":{"content":"foreign"}});
+            child
+                .as_object_mut()
+                .unwrap()
+                .extend(marker.as_object().unwrap().clone());
+            let entries = vec![
+                json!({"type":"user","uuid":"u1","message":{"content":"review"}}),
+                json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"answer"}}),
+                child,
+            ];
+            let messages = entries_to_session_messages(entries, None, 0);
+            assert_eq!(
+                messages.iter().map(|m| m.uuid.as_str()).collect::<Vec<_>>(),
+                vec!["u1", "a1"]
+            );
+        }
+    }
+
+    #[test]
+    fn orphan_control_rows_do_not_replace_the_latest_visible_branch() {
+        let entries = vec![
+            json!({"type":"user","uuid":"u1","message":{"content":"review"}}),
+            json!({"type":"assistant","uuid":"old","parentUuid":"u1","message":{"content":"old branch"}}),
+            json!({"type":"assistant","uuid":"new","parentUuid":"u1","message":{"content":"new branch"}}),
+            json!({"type":"system","uuid":"trailing","parentUuid":"new"}),
+            json!({"type":"system","uuid":"orphan","parentUuid":"missing"}),
+        ];
+        let messages = entries_to_session_messages(entries, Some(1), 1);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].uuid, "new");
+        let meta_only = vec![
+            json!({"type":"user","uuid":"note","isMeta":true,"message":{"content":"internal"}}),
+        ];
+        assert!(entries_to_session_messages(meta_only, None, 0).is_empty());
+    }
+
     #[tokio::test]
     async fn store_messages_follow_parent_chain() {
         let store = InMemorySessionStore::new();
@@ -864,5 +931,33 @@ mod tests {
         // Only the two `uuid`-bearing user/assistant entries count.
         assert_eq!(info.message_count, Some(2));
         assert_eq!(info.summary, "My Title");
+    }
+
+    #[test]
+    fn history_retains_native_origin_without_inventing_owner_or_delivery_authority() {
+        for origin in [
+            json!({"kind":"plugin","name":"review-plugin"}),
+            json!({"kind":"future-source","details":["opaque"]}),
+            json!(17),
+            Value::Null,
+        ] {
+            let entries = vec![json!({"type":"user","uuid":"u1","sessionId":"session",
+                "origin":origin,"message":{"content":"frozen review"}})];
+            let messages = entries_to_session_messages(entries, None, 0);
+            assert_eq!(messages.len(), 1);
+            assert_eq!(
+                messages[0].origin,
+                if origin.is_null() { None } else { Some(origin) }
+            );
+            assert_eq!(messages[0].message, json!({"content":"frozen review"}));
+        }
+        let message: SessionMessage = serde_json::from_value(json!({"type":"user","uuid":"old",
+            "session_id":"session","message":{"content":"old"},"parent_tool_use_id":null}))
+        .unwrap();
+        assert!(message.origin.is_none());
+        assert!(serde_json::to_value(message)
+            .unwrap()
+            .get("origin")
+            .is_none());
     }
 }

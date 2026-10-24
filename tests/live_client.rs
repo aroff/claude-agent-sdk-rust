@@ -117,7 +117,7 @@ async fn live_client_get_mcp_status() {
 
     let status = client.get_mcp_status().await.unwrap();
     assert!(status.is_object());
-    eprintln!("[ok] mcp status: {}", status);
+    eprintln!("[ok] mcp status: {status}");
     client.disconnect().await.unwrap();
 }
 

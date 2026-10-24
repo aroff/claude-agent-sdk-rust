@@ -340,7 +340,7 @@ impl Query {
             "request_id": id,
             "request": request,
         });
-        let payload = format!("{}\n", envelope);
+        let payload = format!("{envelope}\n");
         self.writer.lock().await.write(&payload).await?;
 
         match timeout {
@@ -403,7 +403,7 @@ impl Query {
             "message": {"role": "user", "content": prompt},
             "parent_tool_use_id": Value::Null,
         });
-        let payload = format!("{}\n", msg);
+        let payload = format!("{msg}\n");
         self.writer.lock().await.write(&payload).await
     }
 
@@ -604,7 +604,7 @@ async fn read_loop(mut reader: Box<dyn TransportReader>, routing: ReadLoopRoutin
                         "type": "control_response",
                         "response": resp,
                     });
-                    let payload = format!("{}\n", envelope);
+                    let payload = format!("{envelope}\n");
                     let _ = writer.lock().await.write(&payload).await;
                 });
             }

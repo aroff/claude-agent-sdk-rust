@@ -169,7 +169,7 @@ impl ClaudeSDKClient {
             "message": {"role": "user", "content": prompt},
             "parent_tool_use_id": Value::Null,
         });
-        let payload = format!("{}\n", msg);
+        let payload = format!("{msg}\n");
         // Access the writer through the Query's internal writer.
         q.lock().await.write_raw(&payload).await
     }
